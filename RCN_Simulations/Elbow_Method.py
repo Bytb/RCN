@@ -1,13 +1,14 @@
 import os
 os.environ["OMP_NUM_THREADS"] = "1"
 
-from experiments.GAT.Models.BaselineModels import DMoNModel
-from experiments.GAT.Models.CAGAT_Ablation import CAGATAblationModel
-from experiments.GAT.HelperFunctions import get_topk_neighbor_mask, plot_embedding_2d, plot_elbow_and_silhouette, elbow_method
+from Models.BaselineModels import DMoNModel
+from Models.RCN import CAGATAblationModel
+from HelperFunctions import get_topk_neighbor_mask, plot_embedding_2d, plot_elbow_and_silhouette, elbow_method
 from sklearn.cluster import KMeans
-from experiments.GAT.Models.LossFunctions import combined_community_loss
-from experiments.GAT.Simulations.RCN_Simulations.ToyGraphs import *
-from experiments.GAT.Data.FacebookEgo import load_facebook_graph
+from Models.LossFunctions import combined_community_loss
+#from Simulations.RCN_Simulations.ToyGraphs import *
+from Data.FacebookEgo import load_facebook_graph
+from Data.PPI import load_ppi_graph
 import random
 import numpy as np
 import torch
@@ -125,8 +126,8 @@ if __name__ == "__main__":
     # unequal_cliques: unequal-size bias
     # star_with_leaf_links: degree heterogeity bias
     #G, pos, x, edge_index, edge_weight = ring_of_cliques()
-    x, edge_index, y, edge_weight, G = load_facebook_graph(use_onehot="True")
-    k = 15
+    x, edge_index, y, edge_weight, G, _, _, _, _, _ = load_ppi_graph(use_onehot="True")
+    k = 100
     # ---Elbow Methods---#
     # --- Step 2: Create basic node embeddings ---
     # dmon_embeddings = run_dmon(x, edge_index, edge_weight, k)
@@ -150,6 +151,6 @@ if __name__ == "__main__":
     plot_embedding_2d(rcn_embeddings, title="RCN_Embeddings", method="tsne", tsne_perplexity=25)
 
     # 4) Reproduce elbow, and also check silhouette to verify k:
-    ks, inertias, sils = plot_elbow_and_silhouette(rcn_embeddings, k_range=range(2, 50))
+    ks, inertias, sils = plot_elbow_and_silhouette(rcn_embeddings, k_range=range(2, k))
 
     print("✅ Finished all simulations. Results saved.")
