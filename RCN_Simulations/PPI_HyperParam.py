@@ -23,7 +23,7 @@ from Data.PPI import load_ppi_graph  # your PPI loader
 # ------------------------
 dataset = "PPI"
 SEED = 42                 # single seed (no averaging)
-K_FIXED = 71              # fixed number of clusters for k-means
+K_FIXED = 1995              # fixed number of clusters for k-means
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Hyperparameter grid
@@ -72,7 +72,14 @@ for c in communities:
         gt_masked.append(cc)
 
 
-
+# --- export exact mask used for ONMI so stats script matches ---
+proj_root = os.path.dirname(os.path.abspath(__file__))                # .../RCN_Test/RCN_Simulations
+graphs_dir = os.path.abspath(os.path.join(proj_root, "..", "Data", "Graphs"))
+os.makedirs(graphs_dir, exist_ok=True)
+with open(os.path.join(graphs_dir, "ppi_valid_nodes.txt"), "w") as f:
+    for i in valid_nodes:
+        f.write(f"{int(i)}\n")
+print(f"[DEBUG] Wrote mask: {len(valid_nodes)} nodes -> {os.path.join(graphs_dir, 'ppi_valid_nodes.txt')}")
 
 
 # --- PPI/ONMI sanity diagnostics (safe) ---
@@ -129,7 +136,7 @@ for lm, ll, lc, lo in pbar:
     # Train
     model.train()
     last_logs = None
-    for _ in range(200):
+    for epoch in range(50):
         optimizer.zero_grad()
         _, _, embeddings = model(x, edge_index, edge_weight)
         loss, logs = combined_community_loss_PPI(
@@ -148,7 +155,7 @@ for lm, ll, lc, lo in pbar:
         last_logs = logs
         
         # surface a tiny heartbeat to the outer tqdm every 10 epochs
-        if (_ + 1) % 10 == 0:
+        if (epoch + 1) % 10 == 0:
             pbar.set_postfix(
                 mod=lm, lap=ll, con=lc, orth=lo,
                 loss=f"{logs.get('loss_total', float(loss.detach().cpu())):.3f}",
@@ -194,6 +201,23 @@ for lm, ll, lc, lo in pbar:
         if len(cc) > 0:
             pred_masked.append(cc)
 
+    # --- ONMI-style counts for reporting (keep >0 after mask, then dedup) ---
+    U = set(valid_nodes)
+
+    gt_sets = []
+    for c in communities:
+        cc = set(c) & U
+        if len(cc) > 0:
+            gt_sets.append(frozenset(cc))
+    onmi_style_gt_count = len(set(gt_sets))
+
+    pred_sets = []
+    for c in pred_comms:
+        cc = set(c) & U
+        if len(cc) > 0:
+            pred_sets.append(frozenset(cc))
+    onmi_style_pred_count = len(set(pred_sets))
+
     # ONMI diagnostics
     onmi_reason = ""
     if len(valid_nodes) < 2:
@@ -203,7 +227,7 @@ for lm, ll, lc, lo in pbar:
     elif len(pred_masked) == 0:
         onmi = float("nan"); onmi_reason = "empty_pred"
     else:
-        onmi = float(onmi_mgh(gt_masked, pred_masked, nodes_mask=valid_nodes))
+        onmi = float(onmi_mgh(communities, pred_comms, nodes_mask=valid_nodes))
         if np.isnan(onmi):
             onmi_reason = "zero_entropy_or_degenerate"
             
@@ -234,8 +258,8 @@ for lm, ll, lc, lo in pbar:
         "DaviesBouldin": (None if np.isnan(db) else round(db, 4)),
         "ONMI": (None if np.isnan(onmi) else round(onmi, 4)),
         "ONMI_valid_nodes": int(len(valid_nodes)),
-        "ONMI_GT_comms": int(len(gt_masked)),
-        "ONMI_Pred_comms": int(len(pred_masked)),
+        "ONMI_GT_comms": int(onmi_style_gt_count),      # was: len(gt_masked)
+        "ONMI_Pred_comms": int(onmi_style_pred_count),  # was: len(pred_masked)
         "ONMI_reason": onmi_reason,
         **extra_logs,
     })
