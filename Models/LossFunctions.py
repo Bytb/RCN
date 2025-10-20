@@ -3,6 +3,7 @@ import torch.nn.functional as F
 import time
 import sys
 torch.autograd.set_detect_anomaly(True)
+from typing import Optional
 
 @torch.no_grad()
 def _build_neighbor_sets(N: int, src: torch.Tensor, dst: torch.Tensor, ew: torch.Tensor):
@@ -14,15 +15,190 @@ def _build_neighbor_sets(N: int, src: torch.Tensor, dst: torch.Tensor, ew: torch
     for u, v in zip(s, d):
         nbrs[u].add(v); nbrs[v].add(u)
     return nbrs
+    
+def contrastive_loss_PPI(
+    H: torch.Tensor,
+    edge_index: torch.Tensor,
+    edge_weight: torch.Tensor,
+    tau: float = 0.5,
+    K: int = 1000,
+    row_block_size: int = 16384,
+    generator: Optional[torch.Generator] = None,
+    max_resample: int = 10,
+    return_stats: bool = False,
+):
+    """
+    Vectorized sampled-contrastive loss (InfoNCE style) with RNBRW node weighting.
+
+    Positives: all neighbors with RNBRW>0.
+    Negatives: per node, K sampled non-neighbors (uniform), resample until ≥1 negative.
+
+    Args:
+        H: [N, d] node embeddings.
+        edge_index: [2, E] (long).
+        edge_weight: [E] RNBRW weights (float/long).
+        tau: temperature.
+        K: negatives per node.
+        row_block_size: number of nodes per row block (controls memory/throughput).
+        generator: optional torch.Generator (seed in your sweep for determinism).
+        max_resample: attempts to ensure ≥1 negative per row.
+        return_stats: if True, also return a dict of per-epoch diagnostics.
+
+    Returns:
+        loss (scalar) if return_stats=False
+        (loss, stats_dict) if return_stats=True
+    """
+    device, dtype = H.device, H.dtype
+    N, d = H.shape
+
+    # Normalize once (numerically safe)
+    Hn = F.normalize(H, p=2, dim=1, eps=1e-12)
+
+    # RNBRW degree weights on device
+    src, dst = edge_index
+    ew = edge_weight.to(dtype)
+    deg = torch.zeros(N, device=device, dtype=dtype)
+    deg.scatter_add_(0, src, ew)
+    deg.scatter_add_(0, dst, ew)
+
+    # Neighbor sets on CPU for fast membership checks during sampling
+    nbrs = _build_neighbor_sets(N, edge_index[0].cpu(), edge_index[1].cpu(), edge_weight.cpu())
+
+    # RNG (CPU-side for sampling indices)
+    gen = generator if generator is not None else torch.Generator(device="cpu")
+    # (Set seed on 'gen' in your sweep, e.g., gen.manual_seed(42))
+
+    # Precompute transpose for fast dot products
+    HnT = Hn.t().contiguous()  # [d, N]
+
+    loss_accum  = torch.zeros((), device=device, dtype=dtype)
+    total_w     = torch.zeros((), device=device, dtype=dtype)
+
+    # ---- instrumentation accumulators (kept on device) ----
+    rows_seen   = 0
+    valid_rows  = 0
+    pos_total   = 0
+    lse_pos_sum = torch.zeros((), device=device, dtype=dtype)
+    lse_neg_sum = torch.zeros((), device=device, dtype=dtype)
+
+    # Helper: safe log-sum-exp over 1D vector (returns -inf if empty)
+    def safe_lse(vec: torch.Tensor) -> torch.Tensor:
+        return torch.logsumexp(vec, dim=0) if vec.numel() > 0 else torch.tensor(float("-inf"), device=device, dtype=dtype)
+
+    # Row-blocked processing
+    for r_start in range(0, N, row_block_size):
+        r_end  = min(r_start + row_block_size, N)
+        rows   = torch.arange(r_start, r_end, device=device, dtype=torch.long)
+        Br     = rows.numel()
+        H_rows = Hn[rows]                         # [Br, d]
+
+        # ---- Build positives index lists (ragged) for this block (CPU→device) ----
+        pos_lists = []
+        pos_counts = torch.zeros(Br, device=device, dtype=torch.long)
+        for idx, i in enumerate(range(r_start, r_end)):
+            if nbrs[i]:
+                pos_idx = torch.tensor(sorted(nbrs[i]), device=device, dtype=torch.long)
+                pos_lists.append(pos_idx)
+                pos_counts[idx] = pos_idx.numel()
+            else:
+                pos_lists.append(None)
+
+        # ---- Sample K negatives per row (CPU), excluding self + positives; ensure ≥1 ----
+        neg_mat = torch.empty((Br, K), dtype=torch.long)  # CPU temp
+        for r_off, i in enumerate(range(r_start, r_end)):
+            exclude = nbrs[i].copy()
+            exclude.add(i)
+            neg_set = set()
+            attempts = 0
+            need = K
+            while len(neg_set) < K and attempts < max_resample:
+                # oversample to reduce collisions
+                cand = torch.randint(0, N, (need * 2,), generator=gen).tolist()
+                for c in cand:
+                    if c not in exclude and c not in neg_set:
+                        neg_set.add(c)
+                        if len(neg_set) == K:
+                            break
+                need = K - len(neg_set)
+                attempts += 1
+            if len(neg_set) == 0:
+                # fallback: linear scan to guarantee at least one negative
+                for c in range(N):
+                    if c not in exclude:
+                        neg_set.add(c)
+                        break
+            # if still <K, pad by repeating (keeps vectorization simple)
+            neg_list = sorted(neg_set)
+            if len(neg_list) < K:
+                neg_list = (neg_list * ((K + len(neg_list) - 1) // len(neg_list)))[:K]
+            neg_mat[r_off, :] = torch.tensor(neg_list, dtype=torch.long)
+
+        neg_mat = neg_mat.to(device)             # [Br, K] on device
+
+        # ---- Vectorized negative logits: [Br, K] ----
+        neg_emb = Hn[neg_mat]                    # [Br, K, d]
+        neg_logits = (H_rows.unsqueeze(1) * neg_emb).sum(dim=-1) / tau  # [Br, K]
+
+        # ---- Positive logits (ragged per row) → compute LSE per row ----
+        lse_pos = torch.full((Br,), float("-inf"), device=device, dtype=dtype)
+        for r_off in range(Br):
+            pos_idx = pos_lists[r_off]
+            if pos_idx is not None and pos_idx.numel() > 0:
+                # [1,d] x [d,P] -> [P]
+                plog = (H_rows[r_off:r_off+1] @ HnT[:, pos_idx]).squeeze(0) / tau
+                lse_pos[r_off] = safe_lse(plog)
+
+        # ---- Denominator via logaddexp(lse_pos, lse_neg) ----
+        lse_neg = torch.logsumexp(neg_logits, dim=1)              # [Br]
+        lse_den = torch.logaddexp(lse_pos, lse_neg)               # [Br]
+
+        # ---- Per-row loss, weighted by RNBRW degree ----
+        has_pos = pos_counts > 0
+        valid = has_pos & torch.isfinite(lse_den)
+
+        if valid.any():
+            row_loss = -(lse_pos[valid] - lse_den[valid])         # [#valid]
+            w = deg[rows[valid]]                                  # [#valid]
+            loss_accum = loss_accum + (row_loss * w).sum()
+            total_w    = total_w    + w.sum()
+
+        # ---- instrumentation updates ----
+        rows_seen  += int(Br)
+        valid_rows += int(valid.sum().item())
+        pos_total  += int(pos_counts.sum().item())
+        # Only accumulate lse over valid rows (avoid -inf)
+        if valid.any():
+            lse_pos_sum = lse_pos_sum + lse_pos[valid].sum()
+            lse_neg_sum = lse_neg_sum + lse_neg[valid].sum()
+
+    loss = loss_accum / (total_w + 1e-6)
+
+    if not return_stats:
+        return loss
+
+    # finalize stats (as plain Python floats for easy logging)
+    vr = max(1, valid_rows)
+    rs = max(1, rows_seen)
+    stats = {
+        "total_w": float(total_w.detach().cpu().item()),
+        "pct_valid": float(valid_rows) / float(rs),
+        "mean_pos_per_row": float(pos_total) / float(rs),
+        "mean_lse_pos": float((lse_pos_sum / vr).detach().cpu().item()),
+        "mean_lse_neg": float((lse_neg_sum / vr).detach().cpu().item()),
+        "rows_seen": rows_seen,
+        "valid_rows": valid_rows,
+    }
+    return loss, stats
+
 
 def contrastive_loss_node_weighted_sampled_vectorized(
     H: torch.Tensor,
     edge_index: torch.Tensor,
     edge_weight: torch.Tensor,
     tau: float = 0.5,
-    K: int = 256,
-    row_block_size: int = 4096,
-    generator: torch.Generator | None = None,
+    K: int = 32,
+    row_block_size: int = 16384,
+    generator: Optional[torch.Generator] = None,
     max_resample: int = 10,
 ):
     """
@@ -156,6 +332,8 @@ def contrastive_loss_node_weighted_sampled_vectorized(
             total_w    = total_w    + w.sum()
 
     return loss_accum / (total_w + 1e-6)
+    
+
 
 
 def modularity_loss(Q, edge_index, edge_weight):
@@ -445,10 +623,14 @@ def combined_community_loss(
     mod_loss = modularity_loss(Q, edge_index, edge_weight) if lambda_mod > 0 else torch.tensor(0.0, device=embeddings.device)
     lap_loss = laplacian_loss(embeddings, edge_index, edge_weight) if lambda_lap > 0 else torch.tensor(0.0, device=embeddings.device)
 
+    # in your sweep/training script, before the loop:
+    g = torch.Generator(device="cpu")
+    g.manual_seed(42)
+    
     # Choose contrastive variant
     if lambda_contrast > 0:
         if contrast_variant == 'node':
-            contrast = contrastive_loss_node_weighted_sampled_vectorized(embeddings, edge_index, edge_weight, tau=contrast_tau, generator=torch.Generator(device="cpu").manual_seed(42))
+            contrast = contrastive_loss_node_weighted(embeddings, edge_index, edge_weight, tau=contrast_tau)
         elif contrast_variant == 'edge':
             contrast = contrastive_loss_edge_scaled(embeddings, edge_index, edge_weight, tau=contrast_tau)
         else:
@@ -457,6 +639,95 @@ def combined_community_loss(
         contrast = torch.tensor(0.0, device=embeddings.device)
 
     return lambda_mod * mod_loss + lambda_lap * lap_loss + lambda_contrast * contrast + lambda_orth * orth_loss
+    
+def combined_community_loss_PPI(
+    embeddings,
+    edge_index,
+    edge_weight,
+    lambda_mod=0.0,
+    lambda_lap=0.0,
+    lambda_contrast=0.0,
+    lambda_orth=0.0,
+    contrast_tau=0.5,
+    contrast_variant='node',  # 'node', 'edge'
+    return_stats: bool = False,
+):
+    device = embeddings.device
+    zero = torch.tensor(0.0, device=device)
+
+    # --- DMoN Orthogonality Loss --- #
+    Q = F.softmax(embeddings, dim=1)
+    S = Q / (Q.sum(dim=0, keepdim=True) + 1e-9)  # [N, K]
+    I = torch.eye(S.size(1), device=device)
+    orth_loss = torch.norm(S.T @ S - I)
+
+    mod_loss = modularity_loss(Q, edge_index, edge_weight) if lambda_mod > 0 else zero
+    lap_loss = laplacian_loss(embeddings, edge_index, edge_weight) if lambda_lap > 0 else zero
+
+    # RNG for contrastive (deterministic across calls if desired)
+    g = torch.Generator(device="cpu")
+    g.manual_seed(42)
+
+    contrast = zero
+    contrast_logs = None
+
+    if lambda_contrast > 0:
+        if contrast_variant == 'node':
+            # renamed function; now supports return_stats
+            if return_stats:
+                contrast, contrast_logs = contrastive_loss_PPI(
+                    embeddings, edge_index, edge_weight,
+                    tau=contrast_tau, generator=g, return_stats=True
+                )
+            else:
+                contrast = contrastive_loss_PPI(
+                    embeddings, edge_index, edge_weight,
+                    tau=contrast_tau, generator=g, return_stats=False
+                )
+        elif contrast_variant == 'edge':
+            # assuming this variant returns only a scalar
+            contrast = contrastive_loss_edge_scaled(
+                embeddings, edge_index, edge_weight, tau=contrast_tau
+            )
+        else:
+            raise ValueError(f"Unknown contrast_variant: {contrast_variant}")
+
+    total_loss = (lambda_mod * mod_loss
+                  + lambda_lap * lap_loss
+                  + lambda_contrast * contrast
+                  + lambda_orth * orth_loss)
+
+    if not return_stats:
+        return total_loss
+
+    # Assemble stats as plain floats for logging
+    logs = {
+        "loss_total": float(total_loss.detach().cpu().item()),
+        "loss_mod": float(mod_loss.detach().cpu().item()),
+        "loss_lap": float(lap_loss.detach().cpu().item()),
+        "loss_contrast": float(contrast.detach().cpu().item()) if lambda_contrast > 0 else 0.0,
+        "loss_orth": float(orth_loss.detach().cpu().item()),
+        "lambda_mod": float(lambda_mod),
+        "lambda_lap": float(lambda_lap),
+        "lambda_contrast": float(lambda_contrast),
+        "lambda_orth": float(lambda_orth),
+        "contrast_variant": str(contrast_variant),
+    }
+
+    if contrast_logs is not None:
+        # Merge in the contrastive diagnostics
+        logs.update({
+            "contrast_total_w": contrast_logs.get("total_w", 0.0),
+            "contrast_pct_valid": contrast_logs.get("pct_valid", 0.0),
+            "contrast_mean_pos_per_row": contrast_logs.get("mean_pos_per_row", 0.0),
+            "contrast_mean_lse_pos": contrast_logs.get("mean_lse_pos", 0.0),
+            "contrast_mean_lse_neg": contrast_logs.get("mean_lse_neg", 0.0),
+            "contrast_rows_seen": contrast_logs.get("rows_seen", 0),
+            "contrast_valid_rows": contrast_logs.get("valid_rows", 0),
+        })
+
+    return total_loss, logs
+
 
 def combined_community_loss_I(
     embeddings,
