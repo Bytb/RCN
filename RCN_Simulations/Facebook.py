@@ -12,15 +12,14 @@ import networkx as nx
 from torch_geometric.data import Data
 import matplotlib.pyplot as plt
 
-from experiments.GAT.Models.LossFunctions import combined_community_loss, modularity_loss_nornbrw
-from experiments.GAT.HelperFunctions import cluster_with_kmeans, generate_final_results
-from experiments.GAT.Data.FacebookEgo import load_facebook_graph
-
-from experiments.GAT.Models.GAT_Attention import GAT
-from experiments.GAT.Models.GCN import GCN
-from experiments.GAT.Models.GraphSAGE import GraphSAGE
-from experiments.GAT.Models.CAGAT_Ablation import CAGATAblationModel  # Renamed from your CAGATAblationModel
-from experiments.GAT.Models.BaselineModels import Encoder, GRACEModel, get_augmented_views, DAEGCModel, SDCNModel, BGRLModel, DMoNModel
+from Models.LossFunctions import combined_community_loss, modularity_loss_nornbrw
+from HelperFunctions import cluster_with_kmeans, generate_final_results
+from Data.FacebookEgo import load_facebook_graph
+from Models.GAT_Attention import GAT
+from Models.GCN import GCN
+from Models.GraphSAGE import GraphSAGE
+from Models.RCN import CAGATAblationModel  # Renamed from your CAGATAblationModel
+from Models.BaselineModels import Encoder, GRACEModel, get_augmented_views, DAEGCModel, SDCNModel, BGRLModel, DMoNModel
 from torch_geometric.nn import DeepGraphInfomax, GCNConv
 import torch.nn.functional as F
 import torch.nn as nn
@@ -28,7 +27,7 @@ from sklearn.cluster import KMeans
 from torch_geometric.utils import to_dense_adj
 
 SEEDS = [888, 0, 2024, 42, 328476]
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda")
 dataset = "Facebook"
 
 def set_seed(seed):
@@ -667,7 +666,7 @@ if __name__ == "__main__":
     # === Load Dataset ===
     x, edge_index, y, edge_weight, G = load_facebook_graph(use_onehot=True, device=device)
     x, edge_index, y, edge_weight = x.to(device), edge_index.to(device), y.to(device), edge_weight.to(device)
-    num_clusters = 2
+    num_clusters = 5
 
     all_results = []
 

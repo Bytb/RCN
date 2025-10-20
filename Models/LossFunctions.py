@@ -21,7 +21,7 @@ def contrastive_loss_PPI(
     edge_index: torch.Tensor,
     edge_weight: torch.Tensor,
     tau: float = 0.5,
-    K: int = 32,
+    K: int = 1000,
     row_block_size: int = 16384,
     generator: Optional[torch.Generator] = None,
     max_resample: int = 10,
