@@ -6,8 +6,10 @@ from Models.RCN import CAGATAblationModel
 from HelperFunctions import get_topk_neighbor_mask, plot_embedding_2d, plot_elbow_and_silhouette, elbow_method
 from sklearn.cluster import KMeans
 from Models.LossFunctions import combined_community_loss
+import matplotlib.pyplot as plt
+import networkx as nx
 #from Simulations.RCN_Simulations.ToyGraphs import *
-from Data.FacebookEgo import load_facebook_graph
+from Data.Cora import load_cora_graph
 from Data.PPI import load_ppi_graph
 import random
 import numpy as np
@@ -126,7 +128,7 @@ if __name__ == "__main__":
     # unequal_cliques: unequal-size bias
     # star_with_leaf_links: degree heterogeity bias
     #G, pos, x, edge_index, edge_weight = ring_of_cliques()
-    x, edge_index, y, edge_weight, G, _, _, _, _, _ = load_ppi_graph(use_onehot="True")
+    x, edge_index, y, edge_weight, G = load_cora_graph(use_onehot="True")
     k = 100
     # ---Elbow Methods---#
     # --- Step 2: Create basic node embeddings ---

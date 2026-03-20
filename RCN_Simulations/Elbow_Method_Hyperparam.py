@@ -24,10 +24,7 @@ from sklearn.metrics import (
 from Models.RCN import CAGATAblationModel
 from Models.LossFunctions import combined_community_loss
 from HelperFunctions import cluster_with_kmeans
-from Data.ZachsKarateClub import load_zachs_karate_club
-from Data.PolBooks import load_polbooks_graph
 from Data.Cora import load_cora_graph
-from Data.FacebookEgo import load_facebook_graph
 
 # ------------------------
 # Config (Karate hard-coded)
@@ -103,7 +100,7 @@ def evaluate_at_k(embeddings: torch.Tensor, y_true: torch.Tensor, k: int):
 # ------------------------
 # Data (Karate, One-Hot features)
 # ------------------------
-x, edge_index, y, edge_weight, G = load_facebook_graph(use_onehot=True, device=device)
+x, edge_index, y, edge_weight, G = load_cora_graph(use_onehot=True, device=device)
 x, edge_index, y, edge_weight = x.to(device), edge_index.to(device), y.to(device), edge_weight.to(device)
 
 # Overcomplete head for training; we will select k* post-hoc from embeddings
