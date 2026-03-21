@@ -5,11 +5,10 @@ import numpy as np
 from torch_geometric.datasets import Planetoid
 from tqdm import tqdm
 
-from Models.RCN import CAGATAblationModel
+from Models.RCN import RCNModel
 from Models.LossFunctions import combined_community_loss
-from HelperFunctions import cluster_with_kmeans
+from RCN_Simulations.HelperFunctions import cluster_with_kmeans
 
-import torch.nn.functional as F
 import random
 import pandas as pd
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score, silhouette_score
@@ -105,7 +104,7 @@ def load_cora_graph():
 
 def train_rcn(x, edge_index, edge_weight, y, k):
 
-    model = CAGATAblationModel(
+    model = RCNModel(
         in_dim=x.size(1),
         hidden_dim=8,
         out_dim=k,

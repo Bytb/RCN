@@ -4,7 +4,7 @@ from rnbrw.weights import compute_weights
 import os
 import pickle
 
-def load_polbooks_graph(use_onehot=True, device='cuda'):
+def load_polbooks_graph(use_onehot=False, device='cuda'):
     """
     Loads the PolBooks graph from .gpickle with RNBRW edge weights and node features.
 

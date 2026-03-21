@@ -13,13 +13,13 @@ from torch_geometric.data import Data
 import matplotlib.pyplot as plt
 
 from Models.LossFunctions import combined_community_loss, modularity_loss_nornbrw
-from HelperFunctions import cluster_with_kmeans, generate_final_results
+from RCN_Simulations.HelperFunctions import cluster_with_kmeans, generate_final_results
 from Data.Cora import load_cora_graph
 
 from Models.GAT_Attention import GAT
 from Models.GCN import GCN
 from Models.GraphSAGE import GraphSAGE
-from Models.RCN import CAGATAblationModel
+from Models.RCN import RCNModel
 from Models.BaselineModels import Encoder, GRACEModel, get_augmented_views, DAEGCModel, SDCNModel, BGRLModel, DMoNModel
 from torch_geometric.nn import DeepGraphInfomax, GCNConv
 import torch.nn.functional as F
@@ -113,7 +113,7 @@ def run_rcn(x, edge_index, y, edge_weight, num_clusters):
 
     for seed in SEEDS:
         set_seed(seed)
-        model = CAGATAblationModel(in_dim=x.size(1), hidden_dim=8, out_dim=num_clusters, heads=4).to(device)
+        model = RCNModel(in_dim=x.size(1), hidden_dim=8, out_dim=num_clusters, heads=4).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
 
         with torch.no_grad():
@@ -708,6 +708,6 @@ if __name__ == "__main__":
     #   logdir = f"logs/{dataset}/FinalResults"
     #   pd.DataFrame(all_results).to_csv(f"{logdir}/{dataset}_Results.csv", index=False)
     # then call:
-    generate_final_results(dataset, base_dir="../../../OneDrive - University of South Florida/RCN_Neurips/RCN_Simulations/logs", final_subdir="FinalResults")
+    generate_final_results(dataset, final_subdir="FinalResults")
 
     print("✅ Finished all simulations. Results saved.")

@@ -6,9 +6,7 @@ from Models.RCN import RCNModel
 from RCN_Simulations.HelperFunctions import get_topk_neighbor_mask, plot_embedding_2d, plot_elbow_and_silhouette, elbow_method
 from sklearn.cluster import KMeans
 from Models.LossFunctions import combined_community_loss
-import matplotlib.pyplot as plt
-import networkx as nx
-from Data.ZachsKarateClub import load_zachs_karate_club
+from Data.ToyGraphs import *
 import random
 import numpy as np
 import torch
@@ -82,11 +80,10 @@ def run_rcn(x, edge_index, edge_weight, max_k):
                         edge_index=edge_index,
                         edge_weight=edge_weight,
                         lambda_mod=0.6,
-                        lambda_lap=1e-4,  # Laplacian/L2 (in-loss)
-                        lambda_contrast=1e-4,
-                        lambda_orth=1e-4,
-                        contrast_tau=0.5,
-                        contrast_variant="node",
+                        lambda_contrast=0.0001,
+                        lambda_lap=0.001,
+                        lambda_orth=0.1,
+                        contrast_variant="node"
                     )
         loss.backward()
         optimizer.step()
@@ -121,14 +118,30 @@ def plot_predicted_communities(G, pos, embeddings, model_name, k_best):
 
 if __name__ == "__main__":
     # --- Toy Graphs --- #
-    x, edge_index, y, edge_weight, G = load_zachs_karate_club(use_onehot="True")
-    k = 34
+    # ring_of_cliques: break modularity via resolution limit - breaks DMoN
+    # single_large_clique: trigger over segmentation -
+    # ring_lattice: degeneracy in modularity solutions
+    # unequal_cliques: unequal-size bias
+    # star_with_leaf_links: degree heterogeity bias
+    G, pos, x, edge_index, edge_weight = ring_of_cliques()
+    k = 12
     # ---Elbow Methods---#
     # --- Step 2: Create basic node embeddings ---
+    dmon_embeddings = run_dmon(x, edge_index, edge_weight, k)
     rcn_embeddings = run_rcn(x, edge_index, edge_weight, k)
     # 1) Check for NaNs / infs
     Z = rcn_embeddings.detach().cpu().numpy()
     assert np.isfinite(Z).all(), "Found NaN/inf in embeddings"
+
+    plot_predicted_communities(G, pos, dmon_embeddings, "DMoN", k_best=6)
+    plot_predicted_communities(G, pos, rcn_embeddings, "RCN", k_best=8)
+
+    # 1) Just like before, but choose a method:
+    plot_embedding_2d(dmon_embeddings, title="DMoN Embeddings", method="pca")
+    plot_embedding_2d(dmon_embeddings, title="DMoN Embeddings", method="tsne", tsne_perplexity=25)
+
+    # 4) Reproduce elbow, and also check silhouette to verify k:
+    ks, inertias, sils = plot_elbow_and_silhouette(dmon_embeddings, k_range=range(2, 16))
 
     #--- RCN ---#
     plot_embedding_2d(rcn_embeddings, title="RCN_Embeddings", method="pca")

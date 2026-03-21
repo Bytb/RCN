@@ -21,9 +21,9 @@ from sklearn.metrics import (
 )
 
 # --- Your project imports ---
-from Models.RCN import CAGATAblationModel
+from Models.RCN import RCNModel
 from Models.LossFunctions import combined_community_loss
-from HelperFunctions import cluster_with_kmeans
+from RCN_Simulations.HelperFunctions import cluster_with_kmeans
 from Data.Cora import load_cora_graph
 
 # ------------------------
@@ -114,7 +114,8 @@ results = []
 # Sweep
 # ------------------------
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-out_dir = os.path.join("../../../OneDrive - University of South Florida/RCN_Neurips/RCN_Simulations/logs", dataset, f"RCN_Sweep_{timestamp}")
+base_dir = os.path.dirname(os.path.abspath(__file__))
+out_dir = os.path.join(base_dir, "logs", dataset, f"RCN_Sweep_{timestamp}")
 os.makedirs(out_dir, exist_ok=True)
 
 pbar = tqdm(sweep_combos, total=len(sweep_combos), desc="λ-grid")
@@ -125,7 +126,7 @@ for lm, ll, lc, lo in pbar:
         set_seed(seed)
 
         # Model with RNBRW-biased attention (pre-softmax), overcomplete head
-        model = CAGATAblationModel(
+        model = RCNModel(
             in_dim=x.size(1),
             hidden_dim=8,
             out_dim=HEAD_OUT_DIM,
