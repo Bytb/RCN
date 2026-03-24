@@ -13,9 +13,9 @@ from tqdm import tqdm
 from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
 
 # --- project imports ---
-from Models.RCN import CAGATAblationModel
+from Models.RCN import RCNModel
 from Models.LossFunctions import combined_community_loss_PPI
-from HelperFunctions import cluster_with_kmeans, onmi_mgh
+from RCN_Simulations.HelperFunctions import cluster_with_kmeans, onmi_mgh
 from Data.PPI import load_ppi_graph  # your PPI loader
 
 # ------------------------
@@ -123,7 +123,7 @@ for lm, ll, lc, lo in pbar:
         set_seed(seed)
 
         # Model (no overcomplete head; out_dim = K_FIXED as requested)
-        model = CAGATAblationModel(
+        model = RCNModel(
             in_dim=x.size(1),
             hidden_dim=8,
             out_dim=K_FIXED,

@@ -1,14 +1,14 @@
 # RCN_Simulations/PPI_HyperParam_ArrayRunner.py
-import os, sys, math, traceback
+import os, sys, traceback
 import random
 import numpy as np
 import pandas as pd
 import torch
 
 # --- project imports (unchanged) ---
-from Models.RCN import CAGATAblationModel
+from Models.RCN import RCNModel
 from Models.LossFunctions import combined_community_loss_PPI
-from HelperFunctions import cluster_with_kmeans, onmi_mgh
+from RCN_Simulations.HelperFunctions import cluster_with_kmeans, onmi_mgh
 from Data.PPI import load_ppi_graph  # your PPI loader
 from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
 
@@ -106,7 +106,7 @@ def main():
                 gt_masked.append(cc)
 
         # --- Model ---
-        model = CAGATAblationModel(
+        model = RCNModel(
             in_dim=x.size(1),
             hidden_dim=8,
             out_dim=K_FIXED,

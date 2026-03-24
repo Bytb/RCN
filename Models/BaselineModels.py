@@ -346,6 +346,3 @@ def get_augmented_views(x, edge_index, drop_edge_rate=0.2, drop_feat_rate=0.3):
     x_2 = drop_feature(x, drop_feat_rate)
 
     return x_1, x_2, edge_index_1, edge_index_2
-
-
-    return x_1, x_2, edge_index_1, edge_index_2
