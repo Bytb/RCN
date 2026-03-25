@@ -1,6 +1,8 @@
-Data/Graphs/
 Results/
 RCN_Simulations/Test_PPI_Scaling/
 RCN_Simulations/Data/
 RCN_Simulations/logs/
 RCN_Simulations/RCN_Simulations/
+
+Data/Graphs/*
+!Data/Graphs/.gitkeep
